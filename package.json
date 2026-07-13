@@ -1,0 +1,15 @@
+{
+  "name": "kon",
+  "version": "1.0.0",
+  "description": "KON — مدير ملفات ذكي لتشغيل وتعديل وتحرير الملفات",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js --port 3000"
+  },
+  "keywords": ["file-manager", "editor", "runner", "arabic", "rtl"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=16"
+  }
+}

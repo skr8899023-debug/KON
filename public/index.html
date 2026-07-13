@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KON — مدير الملفات الذكي</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗂️</text></svg>" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">🗂️</span>
+      <div>
+        <h1>KON</h1>
+        <small>مدير الملفات الذكي — تشغيل · تعديل · تحرير</small>
+      </div>
+    </div>
+    <div class="top-actions">
+      <input id="search" type="search" placeholder="🔍 ابحث في الأسماء والمحتوى…" autocomplete="off" />
+      <button id="btn-newfile" class="btn" title="ملف جديد">＋ ملف</button>
+      <button id="btn-newfolder" class="btn" title="مجلد جديد">＋ مجلد</button>
+      <button id="btn-upload" class="btn" title="رفع ملف">⬆ رفع</button>
+      <input id="file-input" type="file" hidden multiple />
+      <button id="btn-theme" class="btn icon" title="تبديل السمة">🌓</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- الشريط الجانبي: شجرة الملفات -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <span id="root-name">workspace</span>
+        <button id="btn-refresh" class="btn icon small" title="تحديث">⟳</button>
+      </div>
+      <div id="tree" class="tree"></div>
+      <div id="search-results" class="search-results hidden"></div>
+    </aside>
+
+    <div class="splitter" id="splitter"></div>
+
+    <!-- منطقة العمل -->
+    <section class="content">
+      <div class="tabs" id="tabs"></div>
+
+      <div class="editor-toolbar" id="toolbar" hidden>
+        <span id="current-path" class="cur-path"></span>
+        <span class="spacer"></span>
+        <span id="dirty-dot" class="dirty-dot hidden" title="تغييرات غير محفوظة">●</span>
+        <button id="btn-run" class="btn accent" title="تشغيل (Ctrl+Enter)">▶ تشغيل</button>
+        <button id="btn-save" class="btn accent" title="حفظ (Ctrl+S)">💾 حفظ</button>
+        <button id="btn-download" class="btn" title="تنزيل">⬇</button>
+        <button id="btn-rename" class="btn" title="إعادة تسمية">✏</button>
+        <button id="btn-delete" class="btn danger" title="حذف">🗑</button>
+      </div>
+
+      <div class="editor-wrap" id="editor-wrap">
+        <div class="empty-state" id="empty-state">
+          <div class="empty-emoji">🗂️</div>
+          <h2>مرحباً بك في KON</h2>
+          <p>اختر ملفاً من الشجرة على اليمين، أو أنشئ ملفاً جديداً للبدء.</p>
+          <p class="hint">يدعم التطبيق تحرير النصوص والأكواد، معاينة الصور والوسائط،<br/>وتشغيل ملفات <code>JS · Python · Bash · Ruby · PHP</code> مباشرةً.</p>
+        </div>
+
+        <div class="editor-area hidden" id="editor-area">
+          <div class="gutter" id="gutter"></div>
+          <textarea id="editor" spellcheck="false" wrap="off"></textarea>
+        </div>
+
+        <div class="preview hidden" id="preview"></div>
+      </div>
+
+      <!-- لوحة المخرجات -->
+      <div class="console hidden" id="console">
+        <div class="console-head">
+          <span>📤 المخرجات</span>
+          <span class="spacer"></span>
+          <span id="run-meta" class="run-meta"></span>
+          <button id="btn-console-close" class="btn icon small">✕</button>
+        </div>
+        <pre id="console-body" class="console-body"></pre>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- قائمة السياق (نقرة يمنى) -->
+  <div id="ctxmenu" class="ctxmenu hidden"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
