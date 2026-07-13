@@ -49,6 +49,7 @@ function iconFor(name, isDir) {
     md: '📝', txt: '📄', csv: '📊', xml: '📋', yml: '⚙️', yaml: '⚙️',
     png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', svg: '🖼️', webp: '🖼️',
     mp3: '🎵', wav: '🎵', mp4: '🎬', pdf: '📕', zip: '📦',
+    nkm: '🥁', nki: '🎹', nkr: '🎹', nksn: '🎛️',
   };
   return map[ext] || '📄';
 }
@@ -156,6 +157,14 @@ function closeTab(path) {
 async function openFile(path, name) {
   const existing = state.tabs.find((t) => t.path === path);
   if (existing) { switchTab(path); return; }
+  const ext = name.split('.').pop().toLowerCase();
+  // ملفات Kontakt Multi تُفتح في المفتّش المتخصّص
+  if (ext === 'nkm') {
+    const tab = { path, name, nkm: true, binary: true, text: false, content: '', original: '', runnable: false };
+    state.tabs.push(tab);
+    switchTab(path);
+    return;
+  }
   try {
     const info = await api('/api/file?path=' + encodeURIComponent(path));
     const ext = name.split('.').pop().toLowerCase();
@@ -180,6 +189,7 @@ function showEmpty() {
   $('#empty-state').classList.remove('hidden');
   $('#editor-area').classList.add('hidden');
   $('#preview').classList.add('hidden');
+  $('#nkm').classList.add('hidden');
   $('#toolbar').hidden = true;
   $('#console').classList.add('hidden');
   state.active = null;
@@ -193,6 +203,15 @@ function showTab(t) {
   $('#current-path').textContent = t.path;
   $('#btn-run').classList.toggle('hidden', !t.runnable);
   $('#dirty-dot').classList.toggle('hidden', t.content === t.original);
+
+  if (t.nkm) {
+    $('#editor-area').classList.add('hidden');
+    $('#preview').classList.add('hidden');
+    $('#btn-save').classList.add('hidden');
+    showNKM(t);
+    return;
+  }
+  $('#nkm').classList.add('hidden');
 
   if (t.binary || !t.text) {
     showPreview(t);
@@ -228,6 +247,203 @@ function showPreview(t) {
     note.innerHTML = `📦 ملف ثنائي (${fmtSize(t.size)})<br/><br/>لا يمكن عرضه كنص. استخدم زر التنزيل ⬇`;
     p.appendChild(note);
   }
+}
+
+/* ================= مفتّش ملفات Kontakt Multi (.nkm) ================= */
+async function showNKM(t) {
+  const box = $('#nkm');
+  box.classList.remove('hidden');
+  box.innerHTML = '<div class="nkm-loading">⏳ جارٍ تحليل ملف Kontakt Multi…</div>';
+  try {
+    const a = await api('/api/nkm?path=' + encodeURIComponent(t.path));
+    t.analysis = a;
+    renderNKM(t, 'info');
+  } catch (e) {
+    box.innerHTML = `<div class="nkm-loading err">تعذّر التحليل: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderNKM(t, view) {
+  const a = t.analysis;
+  const box = $('#nkm');
+  box.innerHTML = '';
+
+  // شريط تبويبات المفتّش
+  const nav = el('div', 'nkm-nav');
+  const views = [
+    ['info', '📋 معلومات'],
+    ['segments', '🧩 الحاويات'],
+    ['strings', '🔤 النصوص والسكربت'],
+    ['hex', '🔢 Hex'],
+  ];
+  for (const [id, label] of views) {
+    const b = el('button', 'nkm-tab' + (view === id ? ' active' : ''), label);
+    b.onclick = () => renderNKM(t, id);
+    nav.appendChild(b);
+  }
+  box.appendChild(nav);
+
+  const body = el('div', 'nkm-body');
+  box.appendChild(body);
+
+  if (view === 'info') renderNKMInfo(body, a);
+  else if (view === 'segments') renderNKMSegments(body, a);
+  else if (view === 'strings') renderNKMStrings(body, t, a);
+  else if (view === 'hex') renderNKMHex(body, t, a);
+}
+
+function kv(k, v) {
+  const row = el('div', 'kv');
+  row.appendChild(el('span', 'k', k));
+  const val = el('span', 'v');
+  if (v instanceof Node) val.appendChild(v); else val.textContent = v;
+  row.appendChild(val);
+  return row;
+}
+
+function renderNKMInfo(body, a) {
+  const card = el('div', 'nkm-card');
+  card.appendChild(el('h3', '', '🥁 ' + a.format));
+  const g = el('div', 'nkm-grid');
+  g.appendChild(kv('عائلة التنسيق', a.formatFamily));
+  g.appendChild(kv('حجم الملف', a.fileSize.toLocaleString('ar') + ' بايت'));
+  g.appendChild(kv('الحجم المعلن', a.declaredSize.toLocaleString('ar') + (a.sizeMatches ? ' ✓ مطابق' : ' ⚠ غير مطابق')));
+  g.appendChild(kv('المعرّف GUID', mono(a.guid || '—')));
+  g.appendChild(kv('إجمالي الحاويات', String(a.segmentTotal)));
+  g.appendChild(kv('hsin / DSIN / 4KIN', `${a.counts.hsin} / ${a.counts.DSIN} / ${a.counts['4KIN']}`));
+  card.appendChild(g);
+  body.appendChild(card);
+
+  const meta = el('div', 'nkm-card');
+  meta.appendChild(el('h3', '', '🎛️ البيانات الوصفية'));
+  const mg = el('div', 'nkm-grid');
+  mg.appendChild(kv('القالب', a.meta.template || '—'));
+  mg.appendChild(kv('المؤلف/المصدر', a.meta.author || '—'));
+  mg.appendChild(kv('يحتوي سكربت KSP', a.meta.hasScript ? 'نعم ✓' : 'لا'));
+  mg.appendChild(kv('عنوان السكربت', a.meta.scriptTitle || '—'));
+  mg.appendChild(kv('عدد السلاسل النصية', String(a.stringCount)));
+  meta.appendChild(mg);
+  body.appendChild(meta);
+
+  const note = el('div', 'nkm-note');
+  note.innerHTML = '💡 هذا تنسيق ثنائي مغلق المصدر من Native Instruments. يوفّر المفتّش قراءةً كاملة للبنية والبيانات الوصفية، وتحريراً <b>آمناً</b> للنصوص (بنفس الطول) وتعديلاً على مستوى البايت مع أخذ نسخة احتياطية تلقائية (<code>.bak</code>).';
+  body.appendChild(note);
+}
+
+function mono(s) { const e = el('code'); e.textContent = s; return e; }
+
+function renderNKMSegments(body, a) {
+  const card = el('div', 'nkm-card');
+  card.appendChild(el('h3', '', `🧩 خريطة الحاويات (${a.segments.length})`));
+  const table = el('table', 'nkm-table');
+  table.innerHTML = '<thead><tr><th>#</th><th>العلامة</th><th>الإزاحة</th><th>الحجم قبل</th><th>القيمة بعد</th></tr></thead>';
+  const tb = el('tbody');
+  a.segments.forEach((s, i) => {
+    const tr = el('tr');
+    tr.innerHTML = `<td>${i + 1}</td><td><span class="seg seg-${s.marker}">${s.marker}</span></td>` +
+      `<td class="mono">${s.offset}</td><td class="mono">${s.sizeBefore ?? '—'}</td><td class="mono">${s.valueAfter ?? '—'}</td>`;
+    tb.appendChild(tr);
+  });
+  table.appendChild(tb);
+  const wrap = el('div', 'nkm-tablewrap');
+  wrap.appendChild(table);
+  card.appendChild(wrap);
+  body.appendChild(card);
+}
+
+function renderNKMStrings(body, t, a) {
+  // السكربت المستخرج
+  if (a.script && a.script.text) {
+    const sc = el('div', 'nkm-card');
+    sc.appendChild(el('h3', '', `🧾 سكربت Kontakt (KSP) — إزاحة ${a.script.offset}`));
+    const pre = el('pre', 'nkm-script');
+    pre.textContent = a.script.text;
+    sc.appendChild(pre);
+    body.appendChild(sc);
+  }
+
+  const card = el('div', 'nkm-card');
+  const head = el('div', 'nkm-strhead');
+  head.appendChild(el('h3', '', `🔤 السلاسل النصية (${a.strings.length})`));
+  const filter = el('input', 'nkm-filter');
+  filter.placeholder = 'تصفية…';
+  head.appendChild(filter);
+  card.appendChild(head);
+
+  const list = el('div', 'nkm-strlist');
+  const render = (q) => {
+    list.innerHTML = '';
+    const ql = (q || '').toLowerCase();
+    const items = a.strings.filter((s) => !ql || s.text.toLowerCase().includes(ql)).slice(0, 400);
+    for (const s of items) {
+      const row = el('div', 'nkm-str');
+      const off = el('span', 'nkm-str-off', '@' + s.offset);
+      const txt = el('span', 'nkm-str-txt', s.text);
+      const edit = el('button', 'nkm-str-edit', '✏');
+      edit.title = 'تعديل بنفس الطول';
+      edit.onclick = () => editNKMString(t, s);
+      row.appendChild(off); row.appendChild(txt); row.appendChild(edit);
+      list.appendChild(row);
+    }
+    if (!items.length) list.appendChild(el('div', 'nkm-loading', 'لا نتائج.'));
+  };
+  filter.oninput = () => render(filter.value);
+  render('');
+  card.appendChild(list);
+  body.appendChild(card);
+}
+
+async function editNKMString(t, s) {
+  const nv = prompt(`تعديل النص (يجب أن يبقى بطول ${s.length} حرفاً بالضبط):`, s.text);
+  if (nv == null || nv === s.text) return;
+  if (nv.length !== s.length) {
+    toast(`الطول يجب أن يكون ${s.length} حرفاً (أدخلت ${nv.length}). لِمَ لا تُكمل بمسافات؟`, 'err');
+    return;
+  }
+  try {
+    const r = await api('/api/nkm/patch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: t.path, replace: { offset: s.offset, oldText: s.text, newText: nv } }),
+    });
+    toast(`تم التعديل ✓ (نسخة احتياطية: ${r.backup})`, 'ok');
+    // أعد التحليل
+    await showNKM(t);
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function renderNKMHex(body, t, a) {
+  const card = el('div', 'nkm-card');
+  const head = el('div', 'nkm-strhead');
+  head.appendChild(el('h3', '', '🔢 عارض/محرّر Hex'));
+  const offInput = el('input', 'nkm-hexoff');
+  offInput.type = 'number'; offInput.value = t.hexOffset || 0; offInput.min = 0;
+  offInput.style.width = '120px';
+  const go = el('button', 'btn small', 'اذهب');
+  head.appendChild(el('span', '', 'الإزاحة:'));
+  head.appendChild(offInput);
+  head.appendChild(go);
+  card.appendChild(head);
+
+  const out = el('div', 'nkm-hexout');
+  card.appendChild(out);
+  body.appendChild(card);
+
+  const load = async (offset) => {
+    t.hexOffset = offset;
+    out.textContent = '⏳…';
+    try {
+      const h = await api(`/api/nkm/hex?path=${encodeURIComponent(t.path)}&offset=${offset}&length=512`);
+      out.innerHTML = '';
+      for (const r of h.rows) {
+        const line = el('div', 'hexrow');
+        line.innerHTML = `<span class="hex-off">${r.offset.toString(16).padStart(8, '0')}</span>` +
+          `<span class="hex-bytes">${r.hex}</span><span class="hex-ascii">${escapeHtml(r.ascii)}</span>`;
+        out.appendChild(line);
+      }
+    } catch (e) { out.textContent = e.message; }
+  };
+  go.onclick = () => load(parseInt(offInput.value, 10) || 0);
+  await load(parseInt(offInput.value, 10) || 0);
 }
 
 /* ================= المحرر ================= */

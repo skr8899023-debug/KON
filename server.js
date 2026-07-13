@@ -15,6 +15,7 @@ const fsp = fs.promises;
 const path = require('path');
 const { spawn } = require('child_process');
 const url = require('url');
+const nkm = require('./nkm');
 
 // ---------- الإعدادات ----------
 const args = process.argv.slice(2);
@@ -338,6 +339,39 @@ async function handleAPI(req, res, parsed) {
     await fsp.mkdir(path.dirname(abs), { recursive: true });
     await fsp.writeFile(abs, buf);
     return sendJSON(res, 200, { ok: true, size: buf.length });
+  }
+
+  // ---- ملفات .nkm (Kontakt Multi) ----
+  if (route === '/api/nkm' && req.method === 'GET') {
+    const abs = safePath(query.path);
+    const buf = await fsp.readFile(abs);
+    if (!nkm.isNKM(buf)) throw Object.assign(new Error('ليس ملف NKM صالحاً'), { status: 400 });
+    return sendJSON(res, 200, nkm.analyze(buf));
+  }
+
+  if (route === '/api/nkm/hex' && req.method === 'GET') {
+    const abs = safePath(query.path);
+    const buf = await fsp.readFile(abs);
+    const offset = parseInt(query.offset || '0', 10);
+    const length = Math.min(parseInt(query.length || '512', 10), 8192);
+    return sendJSON(res, 200, nkm.hexSlice(buf, offset, length));
+  }
+
+  if (route === '/api/nkm/patch' && req.method === 'POST') {
+    const { path: rel, patches, replace } = await readJSONBody(req);
+    const abs = safePath(rel);
+    const buf = await fsp.readFile(abs);
+    if (!nkm.isNKM(buf)) throw Object.assign(new Error('ليس ملف NKM صالحاً'), { status: 400 });
+    let out;
+    if (replace) {
+      out = nkm.replaceString(buf, replace.offset, replace.oldText, replace.newText);
+    } else {
+      out = nkm.applyPatches(buf, patches || []);
+    }
+    // نسخة احتياطية قبل الكتابة
+    await fsp.copyFile(abs, abs + '.bak').catch(() => {});
+    await fsp.writeFile(abs, out);
+    return sendJSON(res, 200, { ok: true, size: out.length, backup: path.basename(abs) + '.bak' });
   }
 
   // ---- تشغيل ----
