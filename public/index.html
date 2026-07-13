@@ -59,7 +59,10 @@
           <div class="empty-emoji">🗂️</div>
           <h2>مرحباً بك في KON</h2>
           <p>اختر ملفاً من الشجرة على اليمين، أو أنشئ ملفاً جديداً للبدء.</p>
-          <p class="hint">يدعم التطبيق تحرير النصوص والأكواد، معاينة الصور والوسائط،<br/>وتشغيل ملفات <code>JS · Python · Bash · Ruby · PHP</code> مباشرةً.</p>
+          <p class="hint">يدعم التطبيق تحرير النصوص والأكواد، معاينة الصور والوسائط،<br/>
+          تشغيل ملفات <code>JS · Python · Bash · Ruby · PHP</code> مباشرةً،<br/>
+          <b>استوديو موسيقى</b> لملفات <code>MIDI</code> (تشغيل + Piano Roll + مصفوفة إيقاعات)،<br/>
+          ومفتّش ملفات Kontakt <code>NKM · NKI</code>.</p>
         </div>
 
         <div class="editor-area hidden" id="editor-area">
@@ -70,6 +73,8 @@
         <div class="preview hidden" id="preview"></div>
 
         <div class="nkm hidden" id="nkm"></div>
+
+        <div class="studio hidden" id="studio"></div>
       </div>
 
       <!-- لوحة المخرجات -->
@@ -90,6 +95,8 @@
   <!-- قائمة السياق (نقرة يمنى) -->
   <div id="ctxmenu" class="ctxmenu hidden"></div>
 
+  <script src="/midi.js"></script>
   <script src="/app.js"></script>
+  <script src="/studio.js"></script>
 </body>
 </html>

@@ -49,7 +49,7 @@ function iconFor(name, isDir) {
     md: '📝', txt: '📄', csv: '📊', xml: '📋', yml: '⚙️', yaml: '⚙️',
     png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', svg: '🖼️', webp: '🖼️',
     mp3: '🎵', wav: '🎵', mp4: '🎬', pdf: '📕', zip: '📦',
-    nkm: '🥁', nki: '🎹', nkr: '🎹', nksn: '🎛️',
+    nkm: '🥁', nki: '🎹', nkr: '🎹', nksn: '🎛️', mid: '🎼', midi: '🎼',
   };
   return map[ext] || '📄';
 }
@@ -144,6 +144,7 @@ function switchTab(path) {
 function closeTab(path) {
   const t = state.tabs.find((x) => x.path === path);
   if (t && t.content !== t.original && !confirm(`"${t.name}" يحتوي تغييرات غير محفوظة. إغلاق دون حفظ؟`)) return;
+  if (t && t.midi && typeof stopStudioPlayback === 'function') stopStudioPlayback(t);
   state.tabs = state.tabs.filter((x) => x.path !== path);
   if (state.active === path) {
     state.active = state.tabs.length ? state.tabs[state.tabs.length - 1].path : null;
@@ -158,9 +159,16 @@ async function openFile(path, name) {
   const existing = state.tabs.find((t) => t.path === path);
   if (existing) { switchTab(path); return; }
   const ext = name.split('.').pop().toLowerCase();
-  // ملفات Kontakt Multi تُفتح في المفتّش المتخصّص
-  if (ext === 'nkm') {
+  // ملفات Kontakt (.nkm/.nki/.nkr) تُفتح في المفتّش المتخصّص
+  if (['nkm', 'nki', 'nkr', 'nkc'].includes(ext)) {
     const tab = { path, name, nkm: true, binary: true, text: false, content: '', original: '', runnable: false };
+    state.tabs.push(tab);
+    switchTab(path);
+    return;
+  }
+  // ملفات MIDI تُفتح في استوديو الموسيقى
+  if (['mid', 'midi'].includes(ext)) {
+    const tab = { path, name, midi: true, binary: true, text: false, content: '', original: '', runnable: false };
     state.tabs.push(tab);
     switchTab(path);
     return;
@@ -185,11 +193,19 @@ async function openFile(path, name) {
   }
 }
 
+function stopAllStudios() {
+  for (const tb of state.tabs) {
+    if (tb.midi && typeof stopStudioPlayback === 'function') stopStudioPlayback(tb);
+  }
+}
+
 function showEmpty() {
+  stopAllStudios();
   $('#empty-state').classList.remove('hidden');
   $('#editor-area').classList.add('hidden');
   $('#preview').classList.add('hidden');
   $('#nkm').classList.add('hidden');
+  $('#studio').classList.add('hidden');
   $('#toolbar').hidden = true;
   $('#console').classList.add('hidden');
   state.active = null;
@@ -205,13 +221,27 @@ function showTab(t) {
   $('#dirty-dot').classList.toggle('hidden', t.content === t.original);
 
   if (t.nkm) {
+    stopAllStudios();
     $('#editor-area').classList.add('hidden');
     $('#preview').classList.add('hidden');
+    $('#studio').classList.add('hidden');
     $('#btn-save').classList.add('hidden');
     showNKM(t);
     return;
   }
   $('#nkm').classList.add('hidden');
+
+  if (t.midi) {
+    // أوقف تشغيل تبويبات أخرى قبل عرض هذا الاستوديو
+    for (const tb of state.tabs) if (tb !== t && tb.midi) stopStudioPlayback(tb);
+    $('#editor-area').classList.add('hidden');
+    $('#preview').classList.add('hidden');
+    $('#btn-save').classList.add('hidden');
+    showStudio(t);
+    return;
+  }
+  $('#studio').classList.add('hidden');
+  stopAllStudios();
 
   if (t.binary || !t.text) {
     showPreview(t);
@@ -317,10 +347,14 @@ function renderNKMInfo(body, a) {
   const meta = el('div', 'nkm-card');
   meta.appendChild(el('h3', '', '🎛️ البيانات الوصفية'));
   const mg = el('div', 'nkm-grid');
+  if (a.meta.instrumentName) mg.appendChild(kv('اسم الآلة/الطقم', a.meta.instrumentName));
+  if (a.meta.contentType) mg.appendChild(kv('نوع المحتوى', a.meta.contentType));
+  if (a.meta.appVersion) mg.appendChild(kv('إصدار Kontakt', a.meta.appVersion));
   mg.appendChild(kv('القالب', a.meta.template || '—'));
   mg.appendChild(kv('المؤلف/المصدر', a.meta.author || '—'));
   mg.appendChild(kv('يحتوي سكربت KSP', a.meta.hasScript ? 'نعم ✓' : 'لا'));
   mg.appendChild(kv('عنوان السكربت', a.meta.scriptTitle || '—'));
+  if (a.meta.link) mg.appendChild(kv('رابط', a.meta.link));
   mg.appendChild(kv('عدد السلاسل النصية', String(a.stringCount)));
   meta.appendChild(mg);
   body.appendChild(meta);
@@ -374,15 +408,21 @@ function renderNKMStrings(body, t, a) {
   const render = (q) => {
     list.innerHTML = '';
     const ql = (q || '').toLowerCase();
-    const items = a.strings.filter((s) => !ql || s.text.toLowerCase().includes(ql)).slice(0, 400);
+    const all = [...(a.utf16Strings || []), ...a.strings];
+    const items = all.filter((s) => !ql || s.text.toLowerCase().includes(ql)).slice(0, 400);
     for (const s of items) {
       const row = el('div', 'nkm-str');
-      const off = el('span', 'nkm-str-off', '@' + s.offset);
+      const off = el('span', 'nkm-str-off', '@' + s.offset + (s.utf16 ? ' 🅆' : ''));
       const txt = el('span', 'nkm-str-txt', s.text);
-      const edit = el('button', 'nkm-str-edit', '✏');
-      edit.title = 'تعديل بنفس الطول';
-      edit.onclick = () => editNKMString(t, s);
-      row.appendChild(off); row.appendChild(txt); row.appendChild(edit);
+      row.appendChild(off); row.appendChild(txt);
+      if (!s.utf16) {
+        const edit = el('button', 'nkm-str-edit', '✏');
+        edit.title = 'تعديل بنفس الطول';
+        edit.onclick = () => editNKMString(t, s);
+        row.appendChild(edit);
+      } else {
+        row.title = 'سلسلة UTF-16 (للعرض فقط)';
+      }
       list.appendChild(row);
     }
     if (!items.length) list.appendChild(el('div', 'nkm-loading', 'لا نتائج.'));
@@ -716,4 +756,13 @@ document.addEventListener('keydown', (e) => {
 });
 
 /* ================= الإقلاع ================= */
-loadTree().catch((e) => toast('تعذّر تحميل الملفات: ' + e.message, 'err'));
+loadTree()
+  .then(() => {
+    // فتح ملف مباشرة عبر الرابط: #open=مسار/الملف
+    const m = location.hash.match(/^#open=(.+)$/);
+    if (m) {
+      const p = decodeURIComponent(m[1]);
+      openFile(p, p.split('/').pop());
+    }
+  })
+  .catch((e) => toast('تعذّر تحميل الملفات: ' + e.message, 'err'));

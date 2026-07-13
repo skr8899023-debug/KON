@@ -15,15 +15,23 @@
 
 const MARKERS = ['hsin', 'DSIN', '4KIN'];
 
-/** هل هذا الملف من نوع .nkm (NI FileContainer)؟ */
+/** هل هذا الملف حاوية NI FileContainer (nkm/nki/nkr…)؟ */
 function isNKM(buf) {
   if (!buf || buf.length < 32) return false;
-  const declared = buf.readUInt32LE(0);
   const hasHsin = buf.indexOf('hsin', 0, 'latin1') >= 0;
   const hasDsin = buf.indexOf('DSIN', 0, 'latin1') >= 0;
-  // نتساهل: تطابق الحجم المعلن أو وجود العلامات المميّزة
-  return hasHsin && hasDsin && (declared === buf.length || declared === buf.length - 4 || Math.abs(declared - buf.length) < 64);
+  if (!hasHsin || !hasDsin) return false;
+  // إمّا الحجم المعلن قريب من الفعلي، أو علامة hsin عند الإزاحة القياسية 12
+  const declared = buf.readUInt32LE(0);
+  return Math.abs(declared - buf.length) < 4096 || buf.toString('latin1', 12, 16) === 'hsin';
 }
+
+const FORMAT_NAMES = {
+  '.nkm': 'Native Instruments Kontakt Multi (.nkm)',
+  '.nki': 'Native Instruments Kontakt Instrument (.nki)',
+  '.nkr': 'Native Instruments Kontakt Resource (.nkr)',
+  '.nkc': 'Native Instruments Kontakt Cache (.nkc)',
+};
 
 /** يجد كل مواضع علامة معيّنة */
 function findAll(buf, marker) {
@@ -100,13 +108,31 @@ function isTextByte(c) {
   return (c >= 0x20 && c <= 0x7e) || c === 0x09;
 }
 
+/** يستخرج السلاسل النصية UTF-16LE (شائعة في ترويسات nki/nkm) */
+function extractStringsUtf16(buf, minLen = 4, max = 300) {
+  const out = [];
+  const printable = (i) => i + 1 < buf.length && buf[i + 1] === 0 && buf[i] >= 0x20 && buf[i] <= 0x7e;
+  let i = 0;
+  while (i + 1 < buf.length && out.length < max) {
+    if (!printable(i)) { i++; continue; }
+    const start = i;
+    let count = 0;
+    while (printable(i)) { count++; i += 2; }
+    if (count >= minLen) {
+      out.push({ offset: start, length: count * 2, text: buf.toString('utf16le', start, start + count * 2), utf16: true });
+    }
+  }
+  return out;
+}
+
 /** بيانات وصفية معروفة نبحث عنها */
-function detectMeta(buf, strings) {
+function detectMeta(buf, strings, utf16Strings) {
   const meta = {};
   const joined = strings.map((s) => s.text);
+  const wide = (utf16Strings || []).map((s) => s.text);
   const find = (re) => joined.find((t) => re.test(t));
   meta.template = find(/TEMPLATE INSTRUMENT/i) || null;
-  meta.author = (find(/RIGID AUDIO|Native Instruments|Kontakt/i) || '').trim() || null;
+  meta.author = (find(/RIGID AUDIO|Native Instruments/i) || '').replace(/^.*?:\s*/, '').trim() || null;
   meta.hasScript = buf.indexOf('on init', 0, 'latin1') >= 0;
   meta.scriptTitle = (() => {
     const m = joined.find((t) => /_script_title/i.test(t));
@@ -114,21 +140,28 @@ function detectMeta(buf, strings) {
     const mm = m.match(/_script_title\("([^"]*)"\)/);
     return mm ? mm[1] : m;
   })();
+  // من سلاسل UTF-16: اسم الآلة، النوع، الإصدار
+  const kIdx = wide.findIndex((t) => t === 'Kontakt');
+  meta.instrumentName = kIdx > 0 ? wide[kIdx - 1].trim() : (wide.find((t) => /^[\w][\w .\-]{2,40}$/.test(t) && !/Kontakt|color|device|sound|tempo|ver|visib/i.test(t)) || null);
+  meta.contentType = wide.find((t) => /^Kontakt(Instrument|Multi|Bank)$/.test(t)) || null;
+  meta.appVersion = wide.find((t) => /^\d+\.\d+\.\d+\.\d+$/.test(t)) || null;
+  meta.link = (joined.find((t) => /https?:\/\//.test(t)) || '').match(/https?:\/\/\S+/)?.[0] || null;
   return meta;
 }
 
-/** التحليل الكامل لملف .nkm */
-function analyze(buf) {
+/** التحليل الكامل لحاوية NI (nkm/nki/…) */
+function analyze(buf, ext = '.nkm') {
   const declared = buf.readUInt32LE(0);
   const segments = buildSegments(buf);
   const counts = {};
   for (const m of MARKERS) counts[m] = 0;
   for (const s of segments) counts[s.marker]++;
   const strings = extractStrings(buf, 5);
-  const meta = detectMeta(buf, strings);
+  const utf16Strings = extractStringsUtf16(buf, 4);
+  const meta = detectMeta(buf, strings, utf16Strings);
   const guid = buf.length >= 40 ? buf.toString('hex', 24, 40) : null;
   return {
-    format: 'Native Instruments Kontakt Multi (.nkm)',
+    format: FORMAT_NAMES[ext.toLowerCase()] || `Native Instruments FileContainer (${ext})`,
     formatFamily: 'NI FileContainer',
     fileSize: buf.length,
     declaredSize: declared,
@@ -139,8 +172,9 @@ function analyze(buf) {
     segments: segments.slice(0, 500),
     meta,
     stringCount: strings.length,
-    // نُعيد فقط السلاسل ذات القيمة (أطول من 5) لتقليل الضجيج
+    // سلاسل ASCII قابلة للتحرير + سلاسل UTF-16 للعرض
     strings: strings.filter((s) => s.length >= 6).slice(0, 1500),
+    utf16Strings: utf16Strings.slice(0, 300),
     script: extractScript(buf),
   };
 }

@@ -345,8 +345,8 @@ async function handleAPI(req, res, parsed) {
   if (route === '/api/nkm' && req.method === 'GET') {
     const abs = safePath(query.path);
     const buf = await fsp.readFile(abs);
-    if (!nkm.isNKM(buf)) throw Object.assign(new Error('ليس ملف NKM صالحاً'), { status: 400 });
-    return sendJSON(res, 200, nkm.analyze(buf));
+    if (!nkm.isNKM(buf)) throw Object.assign(new Error('ليس ملف حاوية NI صالحاً'), { status: 400 });
+    return sendJSON(res, 200, nkm.analyze(buf, path.extname(abs)));
   }
 
   if (route === '/api/nkm/hex' && req.method === 'GET') {
