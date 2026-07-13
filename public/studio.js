@@ -44,28 +44,37 @@ const Engine = (() => {
   }
 
   const kit = {
-    kick:  (t, v) => { tone(t, 0.35, 160, 45, 'sine', 0.9 * v); noise(t, 0.03, 'lowpass', 900, 1, 0.3 * v); },
-    snare: (t, v) => { tone(t, 0.12, 220, 160, 'triangle', 0.4 * v); noise(t, 0.18, 'highpass', 1600, 0.8, 0.5 * v); },
+    kick:  (t, v, d = 0) => { tone(t, 0.35, 160 + d * 6, 45, 'sine', 0.9 * v); noise(t, 0.03, 'lowpass', 900, 1, 0.3 * v); },
+    snare: (t, v, d = 0) => { tone(t, 0.12, 220 + d * 10, 160, 'triangle', 0.4 * v); noise(t, 0.18, 'highpass', 1600, 0.8, 0.5 * v); },
     hatC:  (t, v) => noise(t, 0.05, 'highpass', 7500, 1.2, 0.35 * v),
     hatO:  (t, v) => noise(t, 0.32, 'highpass', 7000, 1.2, 0.3 * v),
     clap:  (t, v) => { for (let i = 0; i < 3; i++) noise(t + i * 0.012, 0.09, 'bandpass', 1400, 2.5, 0.4 * v); },
-    tom:   (t, v) => tone(t, 0.28, 230, 90, 'sine', 0.7 * v),
+    tom:   (t, v, d = 0) => tone(t, 0.28, 230 + d * 12, 90 + d * 4, 'sine', 0.7 * v),
     daf:   (t, v) => { tone(t, 0.22, 300, 120, 'triangle', 0.5 * v); noise(t, 0.12, 'bandpass', 800, 2, 0.35 * v); },
+    /* طار (Frame drum): رنين جلدي دافئ + صفعة إصبع */
+    tarH:  (t, v) => { tone(t, 0.18, 420, 240, 'triangle', 0.45 * v); noise(t, 0.06, 'bandpass', 2600, 3, 0.4 * v); },
+    tarL:  (t, v) => { tone(t, 0.3, 200, 85, 'sine', 0.65 * v); noise(t, 0.08, 'bandpass', 1100, 2.5, 0.3 * v); },
   };
 
-  /* نوتة MIDI إيقاعية → صوت مناسب (استدلالياً حسب طبقة النغمة) */
+  /* نوتة MIDI إيقاعية → صوت مناسب (استدلالياً حسب طبقة النغمة)
+     التنويع البسيط بالنغمة (d) يمنح كل ضربة طابعاً خاصاً */
   function perc(t, pitch, vel) {
     const v = Math.min(1, vel / 110);
-    if (pitch <= 38) kit.kick(t, v);
-    else if (pitch <= 43) kit.tom(t, v);
-    else if (pitch <= 49) kit.snare(t, v);
+    const d = pitch % 12;
+    if (pitch <= 38) kit.kick(t, v, d);
+    else if (pitch <= 43) kit.tom(t, v, d);
+    else if (pitch <= 47) kit.snare(t, v, d);
+    else if (pitch <= 51) kit.tarL(t, v);
     else if (pitch <= 55) kit.daf(t, v);
-    else if (pitch <= 60) kit.clap(t, v);
+    else if (pitch <= 58) kit.tarH(t, v);
+    else if (pitch <= 62) kit.clap(t, v);
     else if (pitch % 2 === 0) kit.hatC(t, v);
     else kit.hatO(t, v);
   }
 
-  return { ensure, kit, perc, now: () => ctx.currentTime, get ctx() { return ctx; } };
+  function setVolume(v) { ensure(); master.gain.value = Math.min(1, Math.max(0, v)); }
+
+  return { ensure, kit, perc, setVolume, now: () => ctx.currentTime, get ctx() { return ctx; } };
 })();
 
 /* ================= إعداد المصفوفة الإيقاعية ================= */
@@ -77,6 +86,8 @@ const LANES = [
   { id: 'clap', label: '👏 تصفيق',      gm: 39 },
   { id: 'tom', label: '🪘 توم',         gm: 45 },
   { id: 'daf', label: '🪘 دفّ',         gm: 54 },
+  { id: 'tarH', label: '🪘 طار حاد',    gm: 50 },
+  { id: 'tarL', label: '🪘 طار غليظ',   gm: 41 },
 ];
 const TRACK_COLORS = ['#4f8cff', '#7c5cff', '#43d492', '#ffcc4d', '#ff5c72', '#3ecfe0', '#e08add'];
 
@@ -92,12 +103,17 @@ async function showStudio(t) {
       const buf = new Uint8Array(await res.arrayBuffer());
       const data = MIDI.parseMIDI(buf);
       const stepTicks = data.division / 4; // خطوة = 1/16
-      const steps = Math.min(256, Math.max(16, Math.ceil(data.totalTicks / stepTicks / 16) * 16));
+      // خطوات البار حسب الميزان: 4/4 → 16 خطوة، 3/4 → 12 خطوة
+      const ts = data.timeSig || { num: 4, den: 4 };
+      const stepsPerBar = Math.max(4, Math.round(ts.num * (16 / ts.den)));
+      const steps = Math.min(288, Math.max(stepsPerBar, Math.ceil(data.totalTicks / stepTicks / stepsPerBar) * stepsPerBar));
       t.st = {
         data,
         tempo: data.tempo,
         stepTicks,
+        stepsPerBar,
         steps,
+        volume: 0.75,
         lanes: Object.fromEntries(LANES.map((l) => [l.id, new Array(steps).fill(false)])),
         muted: new Set(),
         selTrack: Math.max(0, data.tracks.findIndex((x) => x.notes.length > 0)),
@@ -151,7 +167,24 @@ function renderStudio(t) {
   loopBtn.onclick = () => { st.loop = !st.loop; loopBtn.classList.toggle('on', st.loop); };
   bar.appendChild(loopBtn);
 
-  bar.appendChild(el('span', 'st-info', `القسمة: ${st.data.division} تكّة/ربع · ${st.data.tracks.reduce((s, x) => s + x.notes.length, 0)} نوتة`));
+  // عدّاد الموضع الحيّ (بار : ضربة)
+  const pos = el('span', 'st-pos', '1 : 1');
+  st.posEl = pos;
+  bar.appendChild(pos);
+
+  const ts = st.data.timeSig;
+  bar.appendChild(el('span', 'st-info',
+    `الميزان: ${ts.num}/${ts.den} · القسمة: ${st.data.division} تكّة/ربع · ${st.data.tracks.reduce((s, x) => s + x.notes.length, 0)} نوتة`));
+
+  // التحكم بمستوى الصوت
+  const volWrap = el('span', 'st-vol');
+  volWrap.appendChild(el('span', '', '🔊'));
+  const vol = el('input');
+  vol.type = 'range'; vol.min = 0; vol.max = 100; vol.value = Math.round(st.volume * 100);
+  vol.oninput = () => { st.volume = vol.value / 100; Engine.setVolume(st.volume); };
+  volWrap.appendChild(vol);
+  bar.appendChild(volWrap);
+
   const spacer = el('span', 'spacer'); bar.appendChild(spacer);
 
   const saveBtn = el('button', 'btn accent', '💾 تصدير MIDI');
@@ -203,7 +236,7 @@ function renderStudio(t) {
     row.appendChild(lbl);
     const cells = el('div', 'st-cells');
     for (let s = 0; s < st.steps; s++) {
-      const c = el('button', 'st-cell' + (st.lanes[lane.id][s] ? ' on' : '') + (s % 16 === 0 ? ' bar' : s % 4 === 0 ? ' beat' : ''));
+      const c = el('button', 'st-cell' + (st.lanes[lane.id][s] ? ' on' : '') + (s % st.stepsPerBar === 0 ? ' bar' : s % 4 === 0 ? ' beat' : ''));
       c.dataset.step = s;
       c.onclick = () => {
         st.lanes[lane.id][s] = !st.lanes[lane.id][s];
@@ -266,11 +299,11 @@ function drawRoll(t, playTick = -1) {
     x.fillText(noteName(p) + ' ' + p, 3, y + g.rowH / 2);
   });
 
-  // أعمدة الخطوات
+  // أعمدة الخطوات (حدود البارات حسب الميزان)
   for (let s = 0; s <= st.steps; s++) {
     const xx = g.labelW + s * g.pxStep;
     x.strokeStyle = border;
-    x.globalAlpha = s % 16 === 0 ? 0.9 : s % 4 === 0 ? 0.5 : 0.2;
+    x.globalAlpha = s % st.stepsPerBar === 0 ? 0.9 : s % 4 === 0 ? 0.5 : 0.2;
     x.beginPath(); x.moveTo(xx + 0.5, 0); x.lineTo(xx + 0.5, g.H); x.stroke();
   }
   x.globalAlpha = 1;
@@ -348,13 +381,15 @@ function loopTicks(st) {
   for (const lane of LANES) {
     st.lanes[lane.id].forEach((on, s) => { if (on) end = Math.max(end, (s + 1) * st.stepTicks); });
   }
-  const barTicks = st.stepTicks * 16;
+  // الحلقة تُقفل على حدود البار حسب الميزان (3/4 أو 4/4…)
+  const barTicks = st.stepTicks * st.stepsPerBar;
   return Math.max(barTicks, Math.ceil(end / barTicks) * barTicks);
 }
 
 function startPlay(t) {
   const st = t.st;
   Engine.ensure();
+  Engine.setVolume(st.volume);
   st.playing = true;
   st.events = collectEvents(st);
   st.loopEnd = loopTicks(st);
@@ -388,7 +423,13 @@ function startPlay(t) {
     const cur = (Engine.now() - st.startTime) / spt();
     const tickNow = st.loop ? ((cur % st.loopEnd) + st.loopEnd) % st.loopEnd : cur;
     drawRoll(t, Math.max(0, tickNow));
-    highlightStep(Math.floor(tickNow / st.stepTicks));
+    const step = Math.floor(tickNow / st.stepTicks);
+    highlightStep(step);
+    if (st.posEl && step >= 0) {
+      const barN = Math.floor(step / st.stepsPerBar) + 1;
+      const beatN = Math.floor((step % st.stepsPerBar) / 4) + 1;
+      st.posEl.textContent = `${barN} : ${beatN}`;
+    }
     st.raf = requestAnimationFrame(anim);
   };
   st.raf = requestAnimationFrame(anim);
@@ -400,6 +441,7 @@ function stopPlay(t) {
   stopStudioPlayback(t);
   drawRoll(t);
   highlightStep(-1);
+  if (t.st.posEl) t.st.posEl.textContent = '1 : 1';
   const pb = document.querySelector('.st-play');
   if (pb) pb.textContent = '▶ تشغيل';
 }
@@ -424,7 +466,7 @@ async function exportMIDI(t) {
     rhythmNotes.sort((a, b) => a.tick - b.tick);
     tracks.push({ name: 'KON Rhythm', notes: rhythmNotes });
   }
-  const bytes = MIDI.buildMIDI({ division: st.data.division, tempo: st.tempo, tracks });
+  const bytes = MIDI.buildMIDI({ division: st.data.division, tempo: st.tempo, timeSig: st.data.timeSig, tracks });
 
   const dir = t.path.includes('/') ? t.path.slice(0, t.path.lastIndexOf('/') + 1) : '';
   const base = t.name.replace(/\.(midi?|MIDI?)$/, '');

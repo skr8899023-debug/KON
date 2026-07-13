@@ -213,6 +213,13 @@ body {
 }
 .st-loop.on { border-color: var(--accent); color: var(--accent); }
 .st-info { font-size: 11px; color: var(--muted); }
+.st-pos {
+  font-family: var(--mono); font-size: 15px; font-weight: 700; min-width: 56px; text-align: center;
+  background: var(--bg-3); border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px;
+  color: var(--accent); direction: ltr;
+}
+.st-vol { display: flex; align-items: center; gap: 6px; }
+.st-vol input[type="range"] { width: 90px; accent-color: var(--accent); }
 
 .st-tracks { display: flex; align-items: center; gap: 8px; padding: 8px 14px; flex-wrap: wrap; border-bottom: 1px solid var(--border); background: var(--panel); flex-shrink: 0; }
 .st-track {

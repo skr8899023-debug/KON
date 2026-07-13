@@ -23,6 +23,7 @@
     let tempo = 500000; // ميكروثانية لكل نوتة ربع (120 BPM افتراضياً)
     let tempoSet = false;
     let totalTicks = 0;
+    let timeSig = null; // {num, den} — الميزان الموسيقي
 
     for (let t = 0; t < ntrks && p + 8 <= buf.length; t++) {
       const id = str(4);
@@ -45,6 +46,8 @@
           if (mt === 0x51 && ml === 3) {
             const tv = (buf[p] << 16) | (buf[p + 1] << 8) | buf[p + 2];
             if (!tempoSet) { tempo = tv; tempoSet = true; }
+          } else if (mt === 0x58 && ml >= 2 && !timeSig) {
+            timeSig = { num: buf[p], den: Math.pow(2, buf[p + 1]) };
           } else if (mt === 0x03 && !name) {
             let s = ''; for (let i = 0; i < ml; i++) s += String.fromCharCode(buf[p + i]);
             name = s;
@@ -84,7 +87,7 @@
       p = end;
     }
 
-    return { format, division, tempo, bpm: Math.round(60000000 / tempo), tracks, totalTicks };
+    return { format, division, tempo, bpm: Math.round(60000000 / tempo), timeSig: timeSig || { num: 4, den: 4 }, tracks, totalTicks };
   }
 
   /** يبني ملف MIDI (تنسيق 1) من {division, tempo, tracks:[{name, notes:[{tick,dur,pitch,vel,ch}]}]} */
@@ -101,6 +104,8 @@
       const evs = [];
       if (withTempo) {
         evs.push({ tick: 0, ord: 0, bytes: [0xff, 0x51, 0x03, (data.tempo >> 16) & 0xff, (data.tempo >> 8) & 0xff, data.tempo & 0xff] });
+        const ts = data.timeSig || { num: 4, den: 4 };
+        evs.push({ tick: 0, ord: 0, bytes: [0xff, 0x58, 0x04, ts.num, Math.round(Math.log2(ts.den)), 24, 8] });
       }
       if (tr.name) {
         const nb = [...tr.name].map((c) => c.charCodeAt(0) & 0x7f).slice(0, 100);
