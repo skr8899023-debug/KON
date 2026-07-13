@@ -74,7 +74,32 @@ const Engine = (() => {
 
   function setVolume(v) { ensure(); master.gain.value = Math.min(1, Math.max(0, v)); }
 
-  return { ensure, kit, perc, setVolume, now: () => ctx.currentTime, get ctx() { return ctx; } };
+  /* ---- عيّنات صوتية خارجية (WAV/MP3/OGG…) ---- */
+  const samples = new Map(); // path → AudioBuffer
+
+  async function loadSample(path) {
+    if (samples.has(path)) return samples.get(path);
+    ensure();
+    const res = await fetch('/api/raw?path=' + encodeURIComponent(path));
+    if (!res.ok) throw new Error('تعذّر جلب العيّنة: ' + path);
+    const ab = await res.arrayBuffer();
+    const buf = await ctx.decodeAudioData(ab);
+    samples.set(path, buf);
+    return buf;
+  }
+
+  function playSample(t, path, vel) {
+    const buf = samples.get(path);
+    if (!buf) { loadSample(path).then(() => playSample(ctx.currentTime + 0.02, path, vel)).catch(() => {}); return; }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const g = ctx.createGain();
+    g.gain.value = Math.min(1, (vel || 100) / 110);
+    src.connect(g); g.connect(master);
+    src.start(Math.max(t, ctx.currentTime));
+  }
+
+  return { ensure, kit, perc, setVolume, loadSample, playSample, hasSample: (p) => samples.has(p), now: () => ctx.currentTime, get ctx() { return ctx; } };
 })();
 
 /* ================= إعداد المصفوفة الإيقاعية ================= */
@@ -90,6 +115,42 @@ const LANES = [
   { id: 'tarL', label: '🪘 طار غليظ',   gm: 41 },
 ];
 const TRACK_COLORS = ['#4f8cff', '#7c5cff', '#43d492', '#ffcc4d', '#ff5c72', '#3ecfe0', '#e08add'];
+
+/* أسماء الأصوات المدمجة للعرض في القوائم */
+const KIT_LABELS = {
+  kick: '🦶 كيك', snare: '🥁 سنير', hatC: '🎩 هاي هات', hatO: '🎩 هات مفتوح',
+  clap: '👏 تصفيق', tom: '🪘 توم', daf: '🪘 دفّ', tarH: '🪘 طار حاد', tarL: '🪘 طار غليظ',
+};
+
+/* تشغيل نوتة وفق خريطة أصوات المفاتيح:
+   'auto' = الاستدلال التلقائي، معرف آلة مدمجة، أو 'sample:مسار' لعيّنة خارجية */
+function playMapped(st, when, pitch, vel) {
+  const m = st.pitchMap && st.pitchMap[pitch];
+  if (!m || m === 'auto') { Engine.perc(when, pitch, vel); return; }
+  if (m.startsWith('sample:')) { Engine.playSample(when, m.slice(7), vel); return; }
+  if (Engine.kit[m]) { Engine.kit[m](when, Math.min(1, vel / 110)); return; }
+  Engine.perc(when, pitch, vel);
+}
+
+function saveMap(t) {
+  try { localStorage.setItem('kon-map:' + t.path, JSON.stringify(t.st.pitchMap)); } catch {}
+}
+function loadMap(path) {
+  try { return JSON.parse(localStorage.getItem('kon-map:' + path)) || {}; } catch { return {}; }
+}
+
+/* يجمع كل الملفات الصوتية من شجرة workspace لعرضها كعيّنات متاحة */
+function collectAudioFiles() {
+  const out = [];
+  const AUDIO = ['wav', 'mp3', 'ogg', 'flac', 'm4a', 'webm'];
+  (function walk(nodes) {
+    for (const n of nodes || []) {
+      if (n.type === 'dir') walk(n.children);
+      else if (AUDIO.includes(n.name.split('.').pop().toLowerCase())) out.push(n.path);
+    }
+  })(state.tree);
+  return out;
+}
 
 /* ================= فتح ملف MIDI في الاستوديو ================= */
 async function showStudio(t) {
@@ -117,6 +178,8 @@ async function showStudio(t) {
         lanes: Object.fromEntries(LANES.map((l) => [l.id, new Array(steps).fill(false)])),
         muted: new Set(),
         selTrack: Math.max(0, data.tracks.findIndex((x) => x.notes.length > 0)),
+        pitchMap: loadMap(t.path),
+        soundsOpen: true,
         playing: false,
         loop: true,
         dirty: false,
@@ -208,6 +271,9 @@ function renderStudio(t) {
   trackBar.appendChild(el('span', 'st-hint', 'انقر خلية في الشبكة لإضافة/حذف نوتة'));
   box.appendChild(trackBar);
 
+  /* --- لوحة أصوات المفاتيح --- */
+  box.appendChild(buildSoundsPanel(t));
+
   /* --- Piano Roll --- */
   const rollWrap = el('div', 'st-rollwrap');
   const canvas = el('canvas', 'st-roll');
@@ -250,6 +316,101 @@ function renderStudio(t) {
   }
   rhythm.appendChild(grid);
   box.appendChild(rhythm);
+}
+
+/* ================= لوحة أصوات المفاتيح (Pitch → Sound) ================= */
+function buildSoundsPanel(t) {
+  const st = t.st;
+  const panel = el('div', 'st-sounds');
+
+  const head = el('div', 'st-sounds-head');
+  const toggle = el('button', 'btn small', (st.soundsOpen ? '▾' : '◂') + ' 🎹 أصوات المفاتيح');
+  toggle.onclick = () => { st.soundsOpen = !st.soundsOpen; renderStudio(t); };
+  head.appendChild(toggle);
+
+  const mapped = Object.keys(st.pitchMap).filter((k) => st.pitchMap[k] !== 'auto').length;
+  head.appendChild(el('span', 'st-info', mapped ? `${mapped} مفتاح مخصّص` : 'كل المفاتيح تلقائية'));
+
+  const importBtn = el('button', 'btn small accent', '⬆ استيراد صوت خارجي');
+  const fileIn = el('input');
+  fileIn.type = 'file'; fileIn.accept = 'audio/*,.wav,.mp3,.ogg,.flac,.m4a'; fileIn.multiple = true; fileIn.hidden = true;
+  importBtn.onclick = () => fileIn.click();
+  fileIn.onchange = async (e) => {
+    const files = [...e.target.files];
+    for (const f of files) {
+      try {
+        await api('/api/upload?path=' + encodeURIComponent('samples/' + f.name), {
+          method: 'POST', headers: { 'Content-Type': 'application/octet-stream' },
+          body: await f.arrayBuffer(),
+        });
+      } catch (err) { toast(`فشل استيراد ${f.name}: ${err.message}`, 'err'); }
+    }
+    e.target.value = '';
+    await loadTree();
+    st.soundsOpen = true;
+    renderStudio(t);
+    toast(`تم استيراد ${files.length} صوت إلى samples/ ✓`, 'ok');
+  };
+  head.appendChild(importBtn);
+  head.appendChild(fileIn);
+
+  if (mapped) {
+    const reset = el('button', 'btn small', 'إعادة الكل لتلقائي');
+    reset.onclick = () => { st.pitchMap = {}; saveMap(t); renderStudio(t); };
+    head.appendChild(reset);
+  }
+  panel.appendChild(head);
+
+  if (!st.soundsOpen) return panel;
+
+  /* المفاتيح المستخدمة في الملف مع عدّاد الاستخدام */
+  const usage = new Map();
+  st.data.tracks.forEach((tr) => tr.notes.forEach((n) => usage.set(n.pitch, (usage.get(n.pitch) || 0) + 1)));
+  const pitches = [...usage.keys()].sort((a, b) => b - a);
+  const audioFiles = collectAudioFiles();
+
+  const list = el('div', 'st-sounds-list');
+  if (!pitches.length) list.appendChild(el('div', 'st-info', 'لا نوتات في الملف بعد — أضف نوتات من الشبكة.'));
+
+  for (const p of pitches) {
+    const row = el('div', 'st-snd');
+    row.appendChild(el('span', 'st-snd-note', `${noteName(p)} (${p})`));
+    row.appendChild(el('span', 'st-snd-count', `×${usage.get(p)}`));
+
+    const sel = el('select', 'st-snd-sel');
+    const addOpt = (val, label) => {
+      const o = el('option', '', label); o.value = val;
+      if ((st.pitchMap[p] || 'auto') === val) o.selected = true;
+      sel.appendChild(o);
+    };
+    addOpt('auto', '⚙️ تلقائي');
+    for (const [id, label] of Object.entries(KIT_LABELS)) addOpt(id, label);
+    if (audioFiles.length) {
+      const grp = el('optgroup'); grp.label = '🎵 عيّنات خارجية';
+      for (const f of audioFiles) {
+        const o = el('option', '', f.split('/').pop()); o.value = 'sample:' + f;
+        if (st.pitchMap[p] === 'sample:' + f) o.selected = true;
+        grp.appendChild(o);
+      }
+      sel.appendChild(grp);
+    }
+    sel.onchange = () => {
+      if (sel.value === 'auto') delete st.pitchMap[p];
+      else st.pitchMap[p] = sel.value;
+      saveMap(t);
+      Engine.ensure();
+      playMapped(st, Engine.now() + 0.02, p, 100);
+    };
+    row.appendChild(sel);
+
+    const prev = el('button', 'st-snd-prev', '🔊');
+    prev.title = 'استمع';
+    prev.onclick = () => { Engine.ensure(); playMapped(st, Engine.now() + 0.02, p, 100); };
+    row.appendChild(prev);
+    list.appendChild(row);
+  }
+  panel.appendChild(list);
+  return panel;
 }
 
 /* ================= رسم Piano Roll ================= */
@@ -338,7 +499,13 @@ function rollClick(t, e) {
   const g = st.geo;
   const rect = st.canvas.getBoundingClientRect();
   const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
-  if (cx < g.labelW) return;
+  if (cx < g.labelW) {
+    // النقر على تسمية المفتاح = معاينة صوته الحالي
+    const row = Math.floor(cy / g.rowH);
+    const pitch = g.rows[row];
+    if (pitch != null) { Engine.ensure(); playMapped(st, Engine.now() + 0.02, pitch, 100); }
+    return;
+  }
   const step = Math.floor((cx - g.labelW) / g.pxStep);
   const row = Math.floor(cy / g.rowH);
   const pitch = g.rows[row];
@@ -353,7 +520,7 @@ function rollClick(t, e) {
   else {
     tr.notes.push({ tick, dur: st.stepTicks, pitch, vel: 100, ch: tr.notes[0] ? tr.notes[0].ch : 9 });
     tr.notes.sort((a, b) => a.tick - b.tick);
-    Engine.ensure(); Engine.perc(Engine.now() + 0.02, pitch, 100);
+    Engine.ensure(); playMapped(st, Engine.now() + 0.02, pitch, 100);
   }
   st.dirty = true;
   st.data.totalTicks = Math.max(st.data.totalTicks, tick + st.stepTicks);
@@ -386,10 +553,19 @@ function loopTicks(st) {
   return Math.max(barTicks, Math.ceil(end / barTicks) * barTicks);
 }
 
-function startPlay(t) {
+async function startPlay(t) {
   const st = t.st;
   Engine.ensure();
   Engine.setVolume(st.volume);
+  // حمّل مسبقاً كل العيّنات الخارجية المستخدمة في خريطة المفاتيح
+  const samplePaths = [...new Set(Object.values(st.pitchMap || {})
+    .filter((v) => typeof v === 'string' && v.startsWith('sample:'))
+    .map((v) => v.slice(7)))];
+  if (samplePaths.length) {
+    const pb = document.querySelector('.st-play');
+    if (pb) pb.textContent = '⏳ تحميل العيّنات…';
+    await Promise.all(samplePaths.map((p) => Engine.loadSample(p).catch((e) => toast(e.message, 'err'))));
+  }
   st.playing = true;
   st.events = collectEvents(st);
   st.loopEnd = loopTicks(st);
@@ -408,7 +584,7 @@ function startPlay(t) {
       const when = st.startTime + e.tick * spt();
       if (when > horizon) break;
       if (when >= Engine.now() - 0.02) {
-        if (e.kind === 'perc') Engine.perc(when, e.pitch, e.vel);
+        if (e.kind === 'perc') playMapped(st, when, e.pitch, e.vel);
         else Engine.kit[e.kind](when, e.vel / 127);
       }
       st.evIdx++;

@@ -268,7 +268,7 @@ function showPreview(t) {
     const img = el('img'); img.src = raw; p.appendChild(img);
   } else if (['mp4', 'webm'].includes(ext)) {
     const v = el('video'); v.src = raw; v.controls = true; p.appendChild(v);
-  } else if (['mp3', 'wav', 'ogg'].includes(ext)) {
+  } else if (['mp3', 'wav', 'ogg', 'flac', 'm4a'].includes(ext)) {
     const a = el('audio'); a.src = raw; a.controls = true; p.appendChild(a);
   } else if (ext === 'pdf') {
     const f = el('iframe'); f.src = raw; p.appendChild(f);

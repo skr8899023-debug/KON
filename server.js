@@ -97,6 +97,9 @@ const MIME = {
   '.mp3': 'audio/mpeg',
   '.mp4': 'video/mp4',
   '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac',
+  '.m4a': 'audio/mp4',
 };
 function mimeOf(p) {
   return MIME[path.extname(p).toLowerCase()] || 'application/octet-stream';
